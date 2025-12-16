@@ -19,6 +19,27 @@ except:
     st.error("No se encontró la URL de la base de datos en los secretos.")
     st.stop()
 
+import streamlit as st
+import pandas as pd
+from sqlalchemy import create_engine, text
+import time
+from datetime import date
+import re
+import sys
+import os
+
+# ==========================================
+# 1. CONFIGURACIÓN Y CONEXIÓN
+# ==========================================
+st.set_page_config(page_title="Atlis Logistics | ERP", page_icon="🚛", layout="wide")
+
+# CONEXIÓN SEGURA USANDO SECRETS
+try:
+    DATABASE_URL = st.secrets["db"]["url"]
+except:
+    st.error("No se encontró la URL de la base de datos en los secretos.")
+    st.stop()
+
 st.markdown("""
 <style>
     .stApp { background-color: #101922; color: #E2E8F0; }
@@ -62,7 +83,7 @@ def check_login(usuario, clave):
         return None
 
 if st.session_state.usuario_activo is None:
-    st.markdown("<h1 style='text-align: center;'>🔐 Acceso LogisticsHub</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center;'>🔐 Acceso al Sistema</h1>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         with st.form("login_form"):
@@ -72,7 +93,7 @@ if st.session_state.usuario_activo is None:
                 user_data = check_login(user_input, pass_input)
                 if user_data:
                     st.session_state.usuario_activo = user_data[1]
-                    st.toast("¡Bienvenido!", icon="👋")
+                    st.toast("Inicio de Sesión Exitoso", icon="✅")
                     time.sleep(0.5)
                     st.rerun()
                 else:
@@ -83,19 +104,19 @@ if st.session_state.usuario_activo is None:
 # 3. MENÚ LATERAL
 # ==========================================
 with st.sidebar:
-    st.title("LogisticsHub")
-    st.caption(f"Usuario: {st.session_state.usuario_activo}")
+    st.title("Logistics Hub")
+    st.caption(f"Usuario Activo: {st.session_state.usuario_activo}")
     st.markdown("---")
     if st.button("Cerrar Sesión"):
         st.session_state.usuario_activo = None
         st.rerun()
     st.markdown("---")
     menu = st.radio("Módulos", 
-        ["Dashboard", "Gestión de Flota", "Conductores", "Clientes", "Rutas", "Tarifarios", "Registrar Viaje", "Importador Masivo"], 
+        ["Dashboard", "Gestión de Flota", "Conductores", "Clientes", "Rutas", "Tarifarios", "Registrar Viaje", "Carga Masiva (Excel)"], 
         label_visibility="collapsed"
     )
     st.markdown("---")
-    st.info("Sistema Operativo v6.8 (FINAL FIX)")
+    st.caption("Versión 7.1 (Diseño + Cliente CRUD)")
 
 # ==========================================
 # 4. FUNCIONES HELPER GLOBALES
@@ -107,11 +128,11 @@ def load_maestros():
     try:
         df_cli = pd.read_sql('SELECT id_cliente, nombre FROM "CLIENTE"', engine)
         df_rut = pd.read_sql('SELECT id_ruta, origen, destino, km_estimados, tarifa_sugerida FROM "RUTAS"', engine)
-        df_con = pd.read_sql('SELECT id_conductor, nombre, rut, licencia, activo FROM "CONDUCTORES"', engine) # FIX: Traer todos los campos
+        df_con = pd.read_sql('SELECT id_conductor, nombre, rut, licencia, activo FROM "CONDUCTORES"', engine)
         df_cam = pd.read_sql('SELECT id_camion, patente, marca FROM "CAMIONES"', engine)
         return df_cli, df_rut, df_con, df_cam
     except Exception as e:
-        st.error(f"Error cargando maestros: {e}")
+        st.error(f"Error cargando datos maestros: {e}")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 def get_or_create_ruta(origen_abbr, destino_abbr):
@@ -119,14 +140,12 @@ def get_or_create_ruta(origen_abbr, destino_abbr):
     
     ruta_key = f"{origen_abbr.upper()}->{destino_abbr.upper()}"
     
-    # 1. Buscar la ruta existente
     df_rutas = load_maestros()[1]
     match = df_rutas[(df_rutas['origen'] == origen_abbr) & (df_rutas['destino'] == destino_abbr)]
     
     if not match.empty:
         return match.iloc[0]['id_ruta'], False
     
-    # 2. Si no existe, crearla
     try:
         with engine.begin() as conn:
             sql_insert = text("""
@@ -136,7 +155,7 @@ def get_or_create_ruta(origen_abbr, destino_abbr):
             """)
             result = conn.execute(sql_insert, {"o": origen_abbr, "d": destino_abbr, "k": 0}).fetchone()
             load_maestros.clear() 
-            st.warning(f"Nueva ruta '{ruta_key}' creada con 0 KM. ¡Debes actualizar los KMs en el módulo Rutas!")
+            st.warning(f"Nueva ruta '{ruta_key}' creada con 0 KM. Favor actualizar los KMs en el módulo Rutas.")
             return result[0], True
     except Exception as e:
         st.error(f"Error al crear ruta automática: {e}")
@@ -148,7 +167,7 @@ def get_or_create_ruta(origen_abbr, destino_abbr):
 
 # --- A. DASHBOARD ---
 if menu == "Dashboard":
-    st.header("📊 Dashboard Gerencial")
+    st.header("Dashboard Gerencial de Operaciones")
     st.markdown("---")
     try:
         with engine.connect() as conn:
@@ -162,11 +181,11 @@ if menu == "Dashboard":
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Venta Real Acumulada", f"${ingreso_total:,.0f}".replace(",", "."))
-    c2.metric("Viajes Totales", total_viajes)
-    c3.metric("Flota", n_cam)
-    c4.metric("Clientes", n_cli)
+    c2.metric("Total de Viajes", total_viajes)
+    c3.metric("Flota Registrada", n_cam)
+    c4.metric("Clientes Activos", n_cli)
 
-    st.markdown("### 📋 Últimos Movimientos")
+    st.markdown("### Últimos Movimientos Registrados")
     try:
         df_last = pd.read_sql("""
             SELECT v.id_viaje, v.fecha, cl.nombre as cliente, r.destino, 
@@ -182,8 +201,8 @@ if menu == "Dashboard":
 
 # --- B. GESTIÓN DE FLOTA ---
 elif menu == "Gestión de Flota":
-    st.header("🚚 Inventario de Flota")
-    tab_new, tab_edit = st.tabs(["➕ Nuevo Vehículo", "✏️ Modificar / Eliminar"])
+    st.header("Inventario y Gestión de Flota")
+    tab_new, tab_edit = st.tabs(["Crear Vehículo", "Modificar / Eliminar"])
     
     with tab_new:
         with st.form("new_truck", clear_on_submit=True):
@@ -196,13 +215,13 @@ elif menu == "Gestión de Flota":
                 anio = st.number_input("Año", 1990, 2030, 2024)
                 rend = st.number_input("Rendimiento (Km/L)", 1.0, 8.0, 2.5)
             
-            if st.form_submit_button("Guardar Vehículo"):
+            if st.form_submit_button("Guardar Vehículo", type="primary"):
                 if pat:
                     try:
                         with engine.begin() as conn:
                             conn.execute(text("INSERT INTO \"CAMIONES\" (patente, marca, modelo, \"año\", rendimiento_esperado) VALUES (:p, :m, :mo, :a, :r)"),
                                          {"p": pat, "m": marca, "mo": modelo, "a": anio, "r": rend})
-                        st.success("Guardado correctamente")
+                        st.success("Vehículo guardado correctamente")
                         time.sleep(1)
                         st.rerun()
                     except Exception as e: st.error(f"Error: {e}")
@@ -222,31 +241,32 @@ elif menu == "Gestión de Flota":
                 n_mod = c2.text_input("Modelo", row['modelo'])
                 n_anio = c2.number_input("Año", 1990, 2030, int(row['año']))
 
-                if st.button("Actualizar Datos"):
+                if st.button("Actualizar Datos", type="primary"):
                     with engine.begin() as conn:
                         conn.execute(text("UPDATE \"CAMIONES\" SET patente=:p, marca=:m, modelo=:mo, \"año\"=:a WHERE id_camion=:id"),
                                      {"p": n_pat, "m": n_mar, "mo": n_mod, "a": n_anio, "id": id_sel})
-                    st.success("Actualizado")
+                    st.success("Datos actualizados")
                     time.sleep(1)
                     st.rerun()
                 
-                if st.button("Eliminar Vehículo", type="primary"):
+                if st.button("Eliminar Vehículo"):
                     try:
                         with engine.begin() as conn:
                             conn.execute(text("DELETE FROM \"CAMIONES\" WHERE id_camion=:id"), {"id": id_sel})
-                        st.success("Eliminado")
+                        st.success("Vehículo eliminado")
                         time.sleep(1)
                         st.rerun()
                     except: st.error("No se puede eliminar (tiene viajes asociados).")
         except: pass
     
+    st.markdown("### Inventario de Flota")
     st.dataframe(pd.read_sql('SELECT * FROM "CAMIONES"', engine), use_container_width=True)
 
 
-# --- C. CONDUCTORES (FIXED) ---
+# --- C. CONDUCTORES ---
 elif menu == "Conductores":
-    st.header("👨‍✈️ Base de Conductores")
-    tab_new, tab_edit = st.tabs(["➕ Nuevo", "✏️ Editar"])
+    st.header("Nómina y Gestión de Conductores")
+    tab_new, tab_edit = st.tabs(["Registrar Conductor", "Modificar / Eliminar"])
 
     with tab_new:
         with st.form("new_driver", clear_on_submit=True):
@@ -255,11 +275,11 @@ elif menu == "Conductores":
             rut = c1.text_input("RUT")
             lic = c2.selectbox("Licencia", ["A5", "A4", "A2", "B"])
             
-            if st.form_submit_button("Guardar"):
+            if st.form_submit_button("Guardar Conductor", type="primary"):
                 with engine.begin() as conn:
                     conn.execute(text("INSERT INTO \"CONDUCTORES\" (nombre, rut, licencia, activo) VALUES (:n, :r, :l, true)"),
                                  {"n": nom, "r": rut, "l": lic})
-                st.success("Conductor Agregado")
+                st.success("Conductor registrado")
                 time.sleep(1)
                 st.rerun()
 
@@ -269,63 +289,106 @@ elif menu == "Conductores":
             if not df.empty:
                 # 1. Selector
                 map_con = {f"{r['nombre']} ({r['rut']})": r['id_conductor'] for i, r in df.iterrows()}
-                sel = st.selectbox("Editar Conductor", list(map_con.keys()))
+                sel = st.selectbox("Seleccionar Conductor", list(map_con.keys()))
                 id_sel = map_con[sel]
                 row = df[df['id_conductor'] == id_sel].iloc[0]
                 
                 # 2. Formulario Edición
-                n_nom = st.text_input("Nombre", row['nombre'])
-                n_rut = st.text_input("RUT", row['rut'])
-                n_lic = st.selectbox("Licencia", ["A5", "A4", "A2", "B"], index=["A5", "A4", "A2", "B"].index(row['licencia']) if row['licencia'] in ["A5", "A4", "A2", "B"] else 0)
-                n_act = st.checkbox("Activo", row['activo'])
+                c1, c2 = st.columns(2)
+                n_nom = c1.text_input("Nombre", row['nombre'])
+                n_rut = c1.text_input("RUT", row['rut'])
+                n_lic = c2.selectbox("Licencia", ["A5", "A4", "A2", "B"], index=["A5", "A4", "A2", "B"].index(row['licencia']) if row['licencia'] in ["A5", "A4", "A2", "B"] else 0)
+                n_act = c2.checkbox("Activo", row['activo'])
                 
-                if st.button("💾 Guardar Cambios"):
+                if st.button("💾 Guardar Cambios", type="primary"):
                     with engine.begin() as conn:
                         sql_upd = text("UPDATE \"CONDUCTORES\" SET nombre=:n, rut=:r, licencia=:l, activo=:a WHERE id_conductor=:id")
                         conn.execute(sql_upd, {"n": n_nom, "r": n_rut, "l": n_lic, "a": n_act, "id": row['id_conductor']})
-                    st.toast("Actualizado", icon="🔄")
+                    st.toast("Datos actualizados", icon="✅")
                     time.sleep(1)
                     st.rerun()
                 
-                if st.button("🗑️ Eliminar", type="primary"):
+                if st.button("🗑️ Eliminar"):
                     try:
                         with engine.begin() as conn:
                             conn.execute(text("DELETE FROM \"CONDUCTORES\" WHERE id_conductor=:id"), {"id": id_sel})
-                        st.success("Eliminado")
+                        st.success("Conductor eliminado")
                         time.sleep(1)
                         st.rerun()
-                    except Exception as e: st.error("No se puede eliminar (tiene viajes asociados).")
+                    except Exception as e: st.error("No es posible eliminar. El conductor tiene viajes asociados.")
         except: pass
         
-    st.markdown("### Nómina de Conductores")
+    st.markdown("### Listado de Conductores")
     st.dataframe(pd.read_sql('SELECT * FROM "CONDUCTORES"', engine), use_container_width=True)
 
 
-# --- D. CLIENTES ---
+# --- D. CLIENTES (NUEVO: CON ELIMINAR/EDITAR) ---
 elif menu == "Clientes":
-    st.header("🏢 Clientes")
-    with st.form("cli_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        nom = col1.text_input("Nombre Empresa")
-        rut = col2.text_input("RUT Empresa")
-        con = st.text_input("Contacto")
-        if st.form_submit_button("Guardar Cliente"):
-            with engine.begin() as conn:
-                conn.execute(text("INSERT INTO \"CLIENTE\" (nombre, rut_empresa, contacto) VALUES (:n, :r, :c)"),
-                             {"n": nom, "r": rut, "c": con})
-            st.success("Cliente guardado")
-            time.sleep(1)
-            st.rerun()
+    st.header("Gestión de Clientes")
     
+    tab_new, tab_edit = st.tabs(["Registrar Cliente", "Modificar / Eliminar"])
+
+    # Tab 1: Registrar
+    with tab_new:
+        with st.form("cli_form", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            nom = col1.text_input("Nombre Empresa")
+            rut = col2.text_input("RUT Empresa")
+            con = st.text_input("Contacto")
+            if st.form_submit_button("Guardar Cliente", type="primary"):
+                with engine.begin() as conn:
+                    conn.execute(text("INSERT INTO \"CLIENTE\" (nombre, rut_empresa, contacto) VALUES (:n, :r, :c)"),
+                                 {"n": nom, "r": rut, "c": con})
+                st.success("Cliente guardado")
+                time.sleep(1)
+                st.rerun()
+    
+    # Tab 2: Modificar/Eliminar
+    with tab_edit:
+        try:
+            df_cli = pd.read_sql('SELECT * FROM "CLIENTE" ORDER BY id_cliente DESC', engine)
+            if not df_cli.empty:
+                map_cli = {f"{r['nombre']} ({r['rut_empresa']})": r['id_cliente'] for i, r in df_cli.iterrows()}
+                sel_cli = st.selectbox("Seleccionar Cliente a Editar", list(map_cli.keys()))
+                id_sel = map_cli[sel_cli]
+                row = df_cli[df_cli['id_cliente'] == id_sel].iloc[0]
+
+                c1, c2 = st.columns(2)
+                n_nom = c1.text_input("Nombre Empresa", value=row['nombre'])
+                n_rut = c2.text_input("RUT Empresa", value=row['rut_empresa'])
+                n_con = st.text_input("Contacto", value=row['contacto'])
+
+                if st.button("💾 Guardar Cambios", type="primary"):
+                    with engine.begin() as conn:
+                        conn.execute(text("UPDATE \"CLIENTE\" SET nombre=:n, rut_empresa=:r, contacto=:c WHERE id_cliente=:id"),
+                                     {"n": n_nom, "r": n_rut, "c": n_con, "id": id_sel})
+                    st.toast("Cliente actualizado", icon="✅")
+                    time.sleep(1)
+                    st.rerun()
+                
+                if st.button("🗑️ Eliminar Cliente"):
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text("DELETE FROM \"CLIENTE\" WHERE id_cliente=:id"), {"id": id_sel})
+                        st.success("Cliente eliminado")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error("No es posible eliminar: El cliente tiene viajes o tarifas asociadas.")
+            else:
+                st.info("No hay clientes registrados.")
+        except Exception as e: st.error(f"Error: {e}")
+    
+    st.markdown("### Listado de Clientes")
     st.dataframe(pd.read_sql('SELECT * FROM "CLIENTE"', engine), use_container_width=True)
 
 
-# --- E. RUTAS (ACTUALIZADO CON MODIFICAR/ELIMINAR) ---
+# --- E. RUTAS ---
 elif menu == "Rutas":
-    st.header("🛣️ Rutas Físicas")
-    st.info("Aquí defines los tramos físicos. Los precios específicos por cliente se configuran en 'Tarifarios'.")
+    st.header("Gestión de Rutas Físicas")
+    st.caption("Defina aquí los tramos físicos. Los precios específicos por cliente se configuran en 'Tarifarios'.")
     
-    tab_new, tab_edit = st.tabs(["➕ Crear Ruta", "✏️ Modificar / Eliminar"])
+    tab_new, tab_edit = st.tabs(["Crear Ruta", "Modificar / Eliminar"])
     df_rutas = load_maestros()[1]
 
     # --- CREAR RUTA ---
@@ -337,7 +400,7 @@ elif menu == "Rutas":
             km = c1.number_input("Kms", 0, 5000)
             tar_ref = c2.number_input("Tarifa Referencial (Mercado)", 0, 5000000)
             
-            if st.form_submit_button("Crear Ruta"):
+            if st.form_submit_button("Crear Ruta", type="primary"):
                 try:
                     with engine.begin() as conn:
                         conn.execute(text("INSERT INTO \"RUTAS\" (origen, destino, km_estimados, tarifa_sugerida) VALUES (:o, :d, :k, :t)"),
@@ -353,12 +416,10 @@ elif menu == "Rutas":
         if df_rutas.empty:
             st.info("No hay rutas registradas para modificar.")
         else:
-            # 1. Selector de Ruta
             map_rut = {f"{r['origen']} -> {r['destino']} ({r['km_estimados']} Km)": r['id_ruta'] for i, r in df_rutas.iterrows()}
             sel_rut_label = st.selectbox("Seleccione Ruta a Editar", list(map_rut.keys()))
             id_sel = map_rut[sel_rut_label]
             
-            # 2. Obtener datos de la ruta seleccionada
             row = df_rutas[df_rutas['id_ruta'] == id_sel].iloc[0]
             
             st.markdown("#### Editar Datos Físicos y Referenciales")
@@ -369,7 +430,6 @@ elif menu == "Rutas":
             new_km = col_e1.number_input("Kms Reales", value=int(row['km_estimados']), min_value=0)
             new_tar = col_e2.number_input("Tarifa Referencial ($)", value=int(row['tarifa_sugerida']), min_value=0)
 
-            # 3. Botones de Acción
             col_btn1, col_btn2 = st.columns([1, 4])
             if col_btn1.button("💾 Actualizar Ruta", type="primary"):
                 try:
@@ -380,13 +440,13 @@ elif menu == "Rutas":
                         """)
                         conn.execute(sql_upd, {"o": new_ori, "d": new_des, "k": new_km, "t": new_tar, "id": id_sel})
                     load_maestros.clear() 
-                    st.toast("Ruta Actualizada", icon="🔄")
+                    st.toast("Ruta Actualizada", icon="✅")
                     time.sleep(1)
                     st.rerun()
                 except Exception as e: st.error(f"Error al actualizar: {e}")
             
             st.markdown("---")
-            if st.button("🗑️ Eliminar Ruta", type="primary"):
+            if st.button("🗑️ Eliminar Ruta"):
                 try:
                     with engine.begin() as conn:
                         conn.execute(text("DELETE FROM \"RUTAS\" WHERE id_ruta = :id"), {"id": id_sel})
@@ -402,8 +462,8 @@ elif menu == "Rutas":
 
 # --- F. TARIFARIOS ---
 elif menu == "Tarifarios":
-    st.header("💰 Gestión de Tarifas por Cliente")
-    st.markdown("Asigna precios especiales a clientes para rutas específicas.")
+    st.header("Gestión de Tarifas por Cliente")
+    st.caption("Asigne precios especiales a clientes para rutas específicas.")
     
     try:
         df_cli = pd.read_sql('SELECT id_cliente, nombre FROM "CLIENTE"', engine)
@@ -417,7 +477,7 @@ elif menu == "Tarifarios":
         
         precio = st.number_input("Precio Pactado ($)", min_value=0, step=1000)
         
-        if st.form_submit_button("Guardar Tarifa Especial"):
+        if st.form_submit_button("Guardar Tarifa Especial", type="primary"):
             try:
                 cli_id = int(df_cli.iloc[idx_cli]['id_cliente'])
                 rut_id = int(df_rut.iloc[idx_rut]['id_ruta'])
@@ -432,7 +492,7 @@ elif menu == "Tarifarios":
                     conn.execute(sql, {"c": cli_id, "r": rut_id, "m": precio})
                 st.success(f"Tarifa actualizada para {df_cli.iloc[idx_cli]['nombre']}")
             except Exception as e:
-                st.error(f"Error (Revisa si creaste la tabla TARIFAS en Supabase): {e}")
+                st.error(f"Error (Verifique la tabla TARIFAS en Supabase): {e}")
 
     st.subheader("Tarifas Vigentes")
     try:
@@ -448,7 +508,7 @@ elif menu == "Tarifarios":
 
 # --- G. REGISTRAR VIAJE ---
 elif menu == "Registrar Viaje":
-    st.header("🚀 Nueva Operación Manual")
+    st.header("Registro de Nueva Operación Manual")
     
     df_cli, df_rut, df_con, df_cam = load_maestros()
 
@@ -477,7 +537,6 @@ elif menu == "Registrar Viaje":
         rut_id_sel = int(df_rut.iloc[idx_rut]['id_ruta'])
         precio_sugerido = float(df_rut.iloc[idx_rut]['tarifa_sugerida']) 
 
-        # Consultar si hay tarifa especial
         try:
             with engine.connect() as conn:
                 res = conn.execute(text('SELECT monto_pactado FROM "TARIFAS" WHERE id_cliente=:c AND id_ruta=:r'), 
@@ -522,15 +581,15 @@ elif menu == "Registrar Viaje":
                 st.error(f"Error al registrar: {e}")
 
 
-# --- H. IMPORTADOR MASIVO ---
-elif menu == "Importador Masivo":
-    st.header("📥 Importación Masiva desde Excel")
-    st.markdown("Carga las guías de despacho (Tobar/Cosio). **El sistema creará las rutas nuevas si no existen (con 0 KM).**")
+# --- H. CARGA MASIVA (EXCEL) ---
+elif menu == "Carga Masiva (Excel)": # Nombre formalizado
+    st.header("Carga Masiva de Guías de Despacho (Excel)")
+    st.caption("Esta herramienta permite importar datos de planillas Tobar o Cosio. Las rutas desconocidas se crearán automáticamente con 0 KM.")
 
     df_cli, df_rut, df_con, df_cam = load_maestros()
     
     col_conf1, col_conf2 = st.columns(2)
-    cliente_sel = col_conf1.selectbox("Seleccionar Cliente (Formato)", ["TOBAR", "COSIO"])
+    cliente_sel = col_conf1.selectbox("Seleccionar Cliente (Formato de Archivo)", ["TOBAR", "COSIO"])
     
     id_cliente_bd = None
     if not df_cli.empty:
@@ -539,10 +598,10 @@ elif menu == "Importador Masivo":
             id_cliente_bd = match.iloc[0]['id_cliente']
             st.success(f"Vinculado a cliente BD: {match.iloc[0]['nombre']} (ID: {id_cliente_bd})")
         else:
-            st.warning(f"⚠️ ¡Error! Cliente '{cliente_sel}' no encontrado. Por favor créalo en el módulo Clientes.")
+            st.warning(f"⚠️ ¡Error! Cliente '{cliente_sel}' no encontrado. Por favor créelo en el módulo Clientes.")
             st.stop()
 
-    uploaded_file = st.file_uploader("Subir archivo Excel (.xlsx / .xlsm)", type=["xlsx", "xlsm"])
+    uploaded_file = st.file_uploader("Subir Archivo Excel", type=["xlsx", "xlsm"])
 
     if uploaded_file and id_cliente_bd:
         try:
@@ -553,13 +612,13 @@ elif menu == "Importador Masivo":
                 df_excel = pd.read_excel(uploaded_file, header=23) 
                 df_excel = df_excel.dropna(subset=['FECHA']).copy()
                 
-                st.write("Vista Previa (Tobar):", df_excel.head())
+                st.write("Vista Previa (Formato Tobar):", df_excel.head())
 
                 for index, row in df_excel.iterrows():
                     origen = str(row['DESDE']).strip()
                     destino = str(row['HASTA']).strip()
                     contenedor = f"{row['SIGLA CONTENEDOR']}{row['NUMERO CONTENEDOR']}"
-                    monto = 0.0 
+                    monto = 0.0 # Monto por defecto
                     
                     id_ruta, _ = get_or_create_ruta(origen, destino)
 
@@ -567,7 +626,6 @@ elif menu == "Importador Masivo":
                         "fecha": row['FECHA'],
                         "id_cliente": id_cliente_bd,
                         "id_ruta": id_ruta,
-                        "destino_raw": f"{origen} -> {destino}",
                         "observaciones": f"Contenedor: {contenedor}",
                         "monto": monto
                     })
@@ -577,7 +635,7 @@ elif menu == "Importador Masivo":
                 df_excel = pd.read_excel(uploaded_file, header=9)
                 df_excel = df_excel.dropna(subset=['FECHA']).copy()
                 
-                st.write("Vista Previa (Cosio):", df_excel.head())
+                st.write("Vista Previa (Formato Cosio):", df_excel.head())
 
                 for index, row in df_excel.iterrows():
                     origen = str(row['DESDE']).strip()
@@ -592,13 +650,12 @@ elif menu == "Importador Masivo":
                         "fecha": row['FECHA'],
                         "id_cliente": id_cliente_bd,
                         "id_ruta": id_ruta,
-                        "destino_raw": f"{origen} -> {destino}",
                         "observaciones": f"Contenedor: {row['CONTENEDOR']}",
                         "monto": monto
                     })
 
             # --- PREVISUALIZACIÓN Y CARGA ---
-            st.markdown("### 🕵️‍♂️ Resumen de Viajes a Cargar")
+            st.markdown("### Resumen de Viajes a Procesar")
             df_preview = pd.DataFrame(viajes_a_cargar)
             st.dataframe(df_preview, use_container_width=True)
 
@@ -618,10 +675,10 @@ elif menu == "Importador Masivo":
                             "o": v['observaciones']
                         })
                         count += 1
-                st.success(f"¡Éxito! Se cargaron {count} viajes y se crearon las rutas faltantes (si hubo).")
+                st.success(f"Éxito: Se cargaron {count} viajes y se crearon las rutas faltantes (si aplica).")
                 load_maestros.clear()
                 time.sleep(2)
                 st.rerun()
 
         except Exception as e:
-            st.error(f"Error procesando el archivo: {e}")
+            st.error(f"Error procesando el archivo. Verifique que el formato sea correcto: {e}")
