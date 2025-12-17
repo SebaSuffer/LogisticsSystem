@@ -1,49 +1,100 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
-import time
+import plotly.express as px
+import plotly.graph_objects as go
 from datetime import date
-import re
-import sys
-import os
+import time
 
 # ==========================================
-# 1. CONFIGURACIÓN Y CONEXIÓN
+# 1. CONFIGURACIÓN Y ESTILOS "GOOGLE STITCH"
 # ==========================================
-st.set_page_config(page_title="Atlis Logistics | ERP", page_icon="🚛", layout="wide")
+st.set_page_config(page_title="LogisticsHub", page_icon="🚛", layout="wide")
 
 try:
     DATABASE_URL = st.secrets["db"]["url"]
 except:
-    st.error("No se encontró la URL de la base de datos en los secretos.")
+    st.error("No se encontró la URL de la base de datos.")
     st.stop()
 
-# --- ESTILOS: MODO OSCURO ---
+# --- INYECCIÓN DE CSS (ESTILO DARK SLATE / TAILWIND) ---
 st.markdown("""
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+
 <style>
-    .stApp { background-color: #101922; color: #E2E8F0; }
-    div[data-testid="stMetric"] { background-color: #1A232E; border: 1px solid #2D3748; padding: 15px; border-radius: 8px; }
-    div[data-testid="stMetricLabel"] { color: #94A3B8; font-size: 13px; font-weight: 500; }
-    div[data-testid="stMetricValue"] { color: #FFFFFF; font-size: 24px; font-weight: 600; }
-    section[data-testid="stSidebar"] { background-color: #0d1319; border-right: 1px solid #2D3748; }
-    div.stButton > button { border-radius: 6px; font-weight: 500; border: none; }
-    div[data-testid="stDataFrame"] { background-color: #1A232E; border-radius: 8px; }
-    .stTextInput > div > div > input, .stSelectbox > div > div > div, .stNumberInput > div > div > input { 
-        background-color: #1A232E; color: white; border: 1px solid #2D3748; 
+    /* 1. Fondo General y Fuentes */
+    .stApp {
+        background-color: #0F172A; /* Slate 900 */
+        font-family: 'Inter', sans-serif;
+    }
+    
+    /* 2. Ajustes de Texto */
+    h1, h2, h3 { color: #F8FAFC !important; }
+    p, label, span { color: #94A3B8 !important; }
+    
+    /* 3. Tarjetas KPI Personalizadas (CSS para imitar tu HTML) */
+    .kpi-card {
+        background-color: #1E293B; /* Slate 800 */
+        border: 1px solid #334155;
+        border-radius: 0.5rem;
+        padding: 1.25rem;
+        box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+        margin-bottom: 1rem;
+    }
+    .kpi-header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+    .kpi-title {
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: #94A3B8;
+    }
+    .kpi-value {
+        font-size: 1.875rem;
+        font-weight: 700;
+        color: #F8FAFC;
+        margin-bottom: 0.5rem;
+    }
+    .kpi-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.125rem 0.5rem;
+        border-radius: 0.25rem;
+        font-size: 0.75rem;
+        font-weight: 500;
+    }
+    .badge-green { background-color: rgba(22, 163, 74, 0.2); color: #4ADE80; }
+    .badge-red { background-color: rgba(220, 38, 38, 0.2); color: #F87171; }
+    
+    /* 4. Inputs y Selectores */
+    .stSelectbox > div > div {
+        background-color: #1E293B !important;
+        border: 1px solid #334155 !important;
+        color: white !important;
+    }
+    
+    /* 5. Tablas */
+    div[data-testid="stDataFrame"] {
+        border: 1px solid #334155;
+        border-radius: 8px;
+        background-color: #1E293B;
     }
 </style>
 """, unsafe_allow_html=True)
 
+# ... (MANTÉN TU FUNCIÓN get_engine Y EL LOGIN IGUAL QUE ANTES) ...
 @st.cache_resource
 def get_engine():
     return create_engine(DATABASE_URL, pool_pre_ping=True)
-
 try:
     engine = get_engine()
 except Exception as e:
-    st.error(f"❌ Error fatal de conexión a Supabase: {e}")
+    st.error(f"❌ Error fatal: {e}")
     st.stop()
-
 # ==========================================
 # 2. SISTEMA DE LOGIN
 # ==========================================
@@ -93,12 +144,12 @@ with st.sidebar:
         
     st.markdown("---")
     
-    # MENÚ UNIFICADO
+    # MENÚ DE NAVEGACIÓN
     menu = st.radio("Módulos ERP", 
         [
             "Dashboard", 
             "Historial de Viajes", 
-            "Subir Archivos",  # <--- SECCIÓN NUEVA Y UNIFICADA
+            "Subir Archivos", 
             "Gestión de Flota", 
             "Conductores", 
             "Clientes", 
@@ -109,7 +160,25 @@ with st.sidebar:
     )
     
     st.markdown("---")
-    st.info("Sistema Operativo v10.1 (ERP Full)")
+    
+    # --- NUEVA SECCIÓN: PARAMETROS DEL NEGOCIO ---
+    # Esto define las variables que usa el Dashboard para calcular la plata
+    st.markdown("### ⚙️ Configuración")
+    with st.expander("💰 Costos & Variables", expanded=False):
+        st.caption("Ajusta aquí los valores reales del negocio para el cálculo de utilidad.")
+        
+        # 1. Pago por vuelta (Trato informal)
+        PAGO_CHOFER_POR_VUELTA = st.number_input("Pago Chofer por Vuelta ($)", value=10000, step=1000)
+        
+        # 2. Costo Legal (Imposiciones / Previred)
+        COSTO_PREVIRED = st.number_input("Costo Previred Mensual ($)", value=106012, step=1000, help="Gasto fijo mensual por tener al chofer contratado.")
+        
+        # 3. IVA Petróleo (Para descontar impuestos)
+        iva_input = st.number_input("% Recuperación IVA Petróleo", value=19, max_value=100)
+        IVA_PETROLEO = iva_input / 100
+    
+    st.markdown("---")
+    st.info("Sistema Operativo v10.2 (ERP Full)")
 
 # ==========================================
 # 4. FUNCIONES HELPER GLOBALES
@@ -195,38 +264,237 @@ def parse_ids_para_borrar(texto_input):
 # 5. MÓDULOS DE LA APP
 # ==========================================
 
-# --- A. DASHBOARD ---
+# ==========================================
+# SECCIÓN DASHBOARD (DISEÑO GOOGLE STITCH)
+# ==========================================
 if menu == "Dashboard":
-    st.header("📊 Dashboard Gerencial")
-    st.markdown("---")
+    
+    # 1. ENCABEZADO Y TÍTULO
+    st.markdown("""
+    <div style="margin-bottom: 20px;">
+        <h1 style="display: flex; align-items: center; gap: 10px; font-size: 26px;">
+            <span style="font-size: 32px;">📊</span> Tablero de Control Logístico
+        </h1>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # --- LÓGICA DE DATOS (MANTENIDA) ---
     try:
         with engine.connect() as conn:
-            sql_finance = 'SELECT COUNT(id_viaje), COALESCE(SUM(monto_neto), 0) FROM "VIAJES"'
-            finance_data = conn.execute(text(sql_finance)).fetchone()
-            total_viajes, ingreso_total = finance_data[0], finance_data[1]
-            n_cam = pd.read_sql('SELECT COUNT(*) FROM "CAMIONES"', conn).iloc[0,0]
-            n_cli = pd.read_sql('SELECT COUNT(*) FROM "CLIENTE"', conn).iloc[0,0]
-    except:
-        total_viajes, ingreso_total, n_cam, n_cli = 0, 0, 0, 0
+            # Consultas SQL (Igual que antes)
+            df_ingresos = pd.read_sql(text("""
+                SELECT v.fecha, 'INGRESO' as tipo_movimiento,
+                c.nombre || ' - ' || r.origen || '->' || r.destino as detalle,
+                v.monto_neto as monto, v.estado
+                FROM "VIAJES" v
+                LEFT JOIN "CLIENTE" c ON v.id_cliente = c.id_cliente
+                LEFT JOIN "RUTAS" r ON v.id_ruta = r.id_ruta
+            """), conn)
+            
+            df_egresos = pd.read_sql(text("""
+                SELECT fecha, 'EGRESO' as tipo_movimiento,
+                descripcion as detalle, monto, tipo_gasto, 'Pagado' as estado
+                FROM "GASTOS"
+            """), conn)
+            
+            # Conversión de fechas
+            if not df_ingresos.empty: df_ingresos['fecha'] = pd.to_datetime(df_ingresos['fecha'])
+            if not df_egresos.empty: df_egresos['fecha'] = pd.to_datetime(df_egresos['fecha'])
+
+    except Exception as e:
+        st.error(f"Error BD: {e}")
+        st.stop()
+
+    # 2. FILTROS (ESTILO MODERNO)
+    col_filter_title, col_y, col_m = st.columns([2, 1, 1])
+    with col_filter_title:
+        st.markdown("""
+        <div style="display: flex; align-items: center; gap: 8px; margin-top: 25px;">
+            <span class="material-icons-outlined" style="color: #3B82F6;">calendar_month</span>
+            <span style="font-size: 18px; font-weight: 600; color: #F8FAFC;">Filtros de Tiempo</span>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Lógica de fechas
+    todas_fechas = pd.concat([df_ingresos['fecha'], df_egresos['fecha']])
+    anios = sorted(todas_fechas.dt.year.unique(), reverse=True) if not todas_fechas.empty else [date.today().year]
+    
+    filtro_anio = col_y.selectbox("Año", ["Todos"] + list(anios))
+    
+    filtro_mes = "Todos"
+    if filtro_anio != "Todos":
+        meses = {1:"Enero", 2:"Febrero", 3:"Marzo", 4:"Abril", 5:"Mayo", 6:"Junio", 7:"Julio", 8:"Agosto", 9:"Septiembre", 10:"Octubre", 11:"Noviembre", 12:"Diciembre"}
+        filtro_mes = col_m.selectbox("Mes", ["Todos"] + list(meses.values()))
+
+    # --- FILTRADO DE DATAFRAMES ---
+    df_in = df_ingresos.copy()
+    df_out = df_egresos.copy()
+    
+    if filtro_anio != "Todos":
+        df_in = df_in[df_in['fecha'].dt.year == filtro_anio]
+        df_out = df_out[df_out['fecha'].dt.year == filtro_anio]
+        if filtro_mes != "Todos":
+            mes_idx = list(meses.keys())[list(meses.values()).index(filtro_mes)]
+            df_in = df_in[df_in['fecha'].dt.month == mes_idx]
+            df_out = df_out[df_out['fecha'].dt.month == mes_idx]
+
+    # --- CÁLCULOS MATEMÁTICOS (TU LÓGICA) ---
+    total_ingresos = df_in['monto'].sum() if not df_in.empty else 0
+    total_viajes = len(df_in)
+    
+    # Costo Chofer
+    costo_var = total_viajes * PAGO_CHOFER_POR_VUELTA
+    meses_calc = 1 if (filtro_anio != "Todos" and filtro_mes != "Todos") else (pd.concat([df_in['fecha'], df_out['fecha']]).dt.to_period('M').nunique() if not df_in.empty else 0)
+    costo_fijo = COSTO_PREVIRED * meses_calc
+    total_chofer = costo_var + costo_fijo
+    
+    # Combustible y Otros
+    gasto_petroleo = 0
+    otros = 0
+    if not df_out.empty:
+        mask_pet = (df_out['tipo_gasto'] == 'VARIABLE') & (df_out['detalle'].str.contains('PETRÓLEO', case=False, na=False))
+        gasto_petroleo = df_out[mask_pet]['monto'].sum()
+        otros = df_out[~mask_pet]['monto'].sum()
+        
+    iva_recuperado = gasto_petroleo * IVA_PETROLEO
+    petroleo_real = gasto_petroleo - iva_recuperado
+    
+    egresos_totales = total_chofer + petroleo_real + otros
+    utilidad = total_ingresos - egresos_totales
+    margen = (utilidad / total_ingresos * 100) if total_ingresos > 0 else 0
+
+    st.markdown("---")
+
+    # 3. TARJETAS KPI (DISEÑO HTML PERSONALIZADO)
+    # Función para generar HTML de tarjeta
+    def kpi_card(title, icon, value, subtext="", color_icon="#3B82F6", trend_positive=True):
+        color_trend = "badge-green" if trend_positive else "badge-red"
+        icon_trend = "arrow_upward" if trend_positive else "arrow_downward"
+        
+        return f"""
+        <div class="kpi-card">
+            <div class="kpi-header">
+                <span class="material-icons-outlined" style="font-size: 20px; color: {color_icon};">{icon}</span>
+                <span class="kpi-title">{title}</span>
+            </div>
+            <div class="kpi-value">{value}</div>
+            <div class="{color_trend} kpi-badge">
+                <span class="material-icons-outlined" style="font-size: 12px; margin-right: 4px;">{icon_trend}</span>
+                {subtext}
+            </div>
+        </div>
+        """
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Venta Real Acumulada", f"${ingreso_total:,.0f}".replace(",", "."))
-    c2.metric("Viajes Totales", total_viajes)
-    c3.metric("Flota", n_cam)
-    c4.metric("Clientes", n_cli)
+    
+    with c1:
+        st.markdown(kpi_card(
+            "Utilidad Neta", "paid", f"${utilidad:,.0f}", 
+            f"Margen {margen:.1f}%", color_icon="#F59E0B", trend_positive=(utilidad>0)
+        ), unsafe_allow_html=True)
+        
+    with c2:
+        # Viajes no tiene trend, usamos un placeholder visual
+        st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-header">
+                <span class="material-icons-outlined" style="font-size: 20px; color: #10B981;">local_shipping</span>
+                <span class="kpi-title">Viajes Realizados</span>
+            </div>
+            <div class="kpi-value">{total_viajes}</div>
+            <div class="kpi-badge" style="background-color: rgba(59, 130, 246, 0.1); color: #60A5FA;">
+                <span class="material-icons-outlined" style="font-size: 12px; margin-right: 4px;">info</span>
+                Operación activa
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with c3:
+        st.markdown(kpi_card(
+            "Egresos Totales", "payments", f"${egresos_totales:,.0f}", 
+            "Gastos operativos", color_icon="#EF4444", trend_positive=False
+        ), unsafe_allow_html=True)
+        
+    with c4:
+        st.markdown(kpi_card(
+            "IVA Recuperado", "receipt_long", f"${iva_recuperado:,.0f}", 
+            "Ahorro Fiscal", color_icon="#3B82F6", trend_positive=True
+        ), unsafe_allow_html=True)
 
-    st.markdown("### 📋 Últimos Movimientos (Ingresos)")
-    try:
-        df_last = pd.read_sql("""
-            SELECT v.id_viaje, v.fecha, cl.nombre as cliente, r.destino, 
-                   CONCAT('$', v.monto_neto) as valor_cobrado, v.estado 
-            FROM "VIAJES" v
-            LEFT JOIN "RUTAS" r ON v.id_ruta = r.id_ruta
-            LEFT JOIN "CLIENTE" cl ON v.id_cliente = cl.id_cliente
-            ORDER BY v.fecha DESC LIMIT 10
-        """, engine)
-        st.dataframe(df_last, use_container_width=True, hide_index=True)
-    except: pass
+    # 4. GRÁFICOS (ESTILO PLOTLY PARA FONDO OSCURO)
+    st.markdown("<h3 style='margin-top: 30px; margin-bottom: 20px; color: #F8FAFC;'>📈 Análisis Gráfico</h3>", unsafe_allow_html=True)
+    
+    tab_flow, tab_cost = st.tabs(["📊 Flujo de Caja", "🍩 Estructura de Costos"])
+
+    # --- GRÁFICO BARRAS ---
+    with tab_flow:
+        df_graph = pd.DataFrame()
+        if not df_in.empty:
+            g_in = df_in.groupby(pd.Grouper(key='fecha', freq='M'))['monto'].sum().reset_index()
+            g_in['Tipo'] = 'Ingresos'
+            df_graph = pd.concat([df_graph, g_in])
+        
+        if not df_out.empty:
+            g_out = df_out.groupby(pd.Grouper(key='fecha', freq='M'))['monto'].sum().reset_index()
+            # Sumamos costo fijo visualmente
+            g_out['monto'] += COSTO_PREVIRED
+            g_out['Tipo'] = 'Egresos'
+            df_graph = pd.concat([df_graph, g_out])
+
+        if not df_graph.empty:
+            # Colores EXACTOS de tu diseño HTML
+            color_map = {"Ingresos": "#2dd4bf", "Egresos": "#fb7185"} # Teal y Rose
+            
+            fig = px.bar(df_graph, x="fecha", y="monto", color="Tipo", barmode="group",
+                         color_discrete_map=color_map)
+            
+            # Personalización TOTAL para que parezca Chart.js del diseño
+            fig.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(30, 41, 59, 1)', # Slate 800
+                font=dict(color="#94A3B8", family="Inter"),
+                margin=dict(t=20, l=20, r=20, b=20),
+                legend=dict(title=None, orientation="h", y=1.02, x=1),
+                xaxis=dict(showgrid=False, title=None),
+                yaxis=dict(showgrid=True, gridcolor="#334155", title=None)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Sin datos para graficar.")
+
+    # --- GRÁFICO DONA ---
+    with tab_cost:
+        labels = ["Chofer (Sueldo+Bonos)", "Combustible (Neto)", "Otros"]
+        values = [total_chofer, petroleo_real, otros]
+        
+        # Filtramos ceros
+        data_pie = {"Item": [], "Monto": []}
+        for l, v in zip(labels, values):
+            if v > 0:
+                data_pie["Item"].append(l)
+                data_pie["Monto"].append(v)
+        
+        if data_pie["Monto"]:
+            # Colores EXACTOS de tu diseño HTML
+            colors_pie = ['#7dd3fc', '#fcd34d', '#fca5a5'] # Light Blue, Amber, Pink
+            
+            fig_pie = go.Figure(data=[go.Pie(
+                labels=data_pie["Item"], 
+                values=data_pie["Monto"], 
+                hole=.6, # Dona grande como en el diseño
+                marker=dict(colors=colors_pie, line=dict(color='#1E293B', width=2))
+            )])
+            
+            fig_pie.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(30, 41, 59, 1)', # Slate 800
+                font=dict(color="#94A3B8", family="Inter"),
+                margin=dict(t=20, l=20, r=20, b=20),
+                legend=dict(orientation="h", y=-0.1)
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.info("Sin costos registrados.")
 
 # --- HISTORIAL DE VIAJES ---
 elif menu == "Historial de Viajes":
@@ -300,15 +568,42 @@ elif menu == "Subir Archivos":
             try:
                 viajes_a_cargar = []
                 if formato_sel == "Formato TOBAR":
-                    df_excel = pd.read_excel(uploaded_viajes, header=23, usecols="A:G")
+                    # CORRECCIÓN 1: Cambiamos "A:G" por "A:H"
+                    # Esto obliga a Pandas a leer hasta la columna H, donde realmente está "HASTA"
+                    df_excel = pd.read_excel(uploaded_viajes, header=23, usecols="A:H")
+                    
+                    # Limpieza estándar de cabeceras
+                    df_excel.columns = df_excel.columns.str.strip().str.upper()
+                    
+                    # CORRECCIÓN 2: Eliminamos la columna "fantasma" (F) que se crea por el espacio doble
+                    # Pandas suele llamarla "UNNAMED: 5". La borramos para limpiar el DF.
+                    df_excel = df_excel.loc[:, ~df_excel.columns.str.contains('^UNNAMED')]
+
+                    # Validación de seguridad
+                    if 'HASTA' not in df_excel.columns:
+                         st.error(f"⚠️ Aún no veo la columna HASTA. Columnas leídas: {df_excel.columns.tolist()}")
+                         st.stop()
+
                     df_excel = df_excel.dropna(subset=['FECHA']).copy()
+                    
                     for index, row in df_excel.iterrows():
+                        # Ahora DESDE y HASTA coincidirán correctamente con las columnas G y H
                         origen = str(row['DESDE']).strip()
-                        destino = str(row['HASTA']).strip()
+                        destino = str(row['HASTA']).strip() 
+                        
                         contenedor = f"{row['SIGLA CONTENEDOR']} {row['NUMERO CONTENEDOR']}"
                         id_ruta, created = get_or_create_ruta(origen, destino)
                         precio = get_precio_automatico(id_cliente_bd, id_ruta, df_rut, df_tar) 
-                        viajes_a_cargar.append({"fecha": row['FECHA'], "id_cliente": id_cliente_bd, "cliente_nombre": nombre_cliente_bd, "id_ruta": id_ruta, "ruta_nombre": f"{origen} -> {destino}", "observaciones": f"Contenedor: {contenedor}", "monto": precio})
+                        
+                        viajes_a_cargar.append({
+                            "fecha": row['FECHA'], 
+                            "id_cliente": id_cliente_bd, 
+                            "cliente_nombre": nombre_cliente_bd, 
+                            "id_ruta": id_ruta, 
+                            "ruta_nombre": f"{origen} -> {destino}", 
+                            "observaciones": f"Contenedor: {contenedor}", 
+                            "monto": precio
+                        })
 
                 elif formato_sel == "Formato COSIO":
                     df_excel = pd.read_excel(uploaded_viajes, header=9, usecols="A:G")
@@ -349,7 +644,7 @@ elif menu == "Subir Archivos":
             except Exception as e: st.error(f"Error procesando viajes: {e}")
 
     # ---------------------------------------------------------
-    # PESTAÑA 2: CARGAR GASTOS
+    # PESTAÑA 2: CARGAR GASTOS (CORREGIDO Y CON FILTRO INTELIGENTE)
     # ---------------------------------------------------------
     with tab_gastos:
         st.subheader("Cargar Gastos (E.E.F.F)")
@@ -365,30 +660,49 @@ elif menu == "Subir Archivos":
                     st.error("❌ No se encontró la hoja 'input_costos'.")
                     st.stop()
 
+                # Limpieza de cabeceras
                 df_gastos.columns = df_gastos.columns.str.strip().str.upper()
+                
+                # Validación básica
                 if 'FECHA' not in df_gastos.columns or 'MONTO' not in df_gastos.columns:
-                    st.error("❌ Faltan columnas FECHA y MONTO.")
+                    st.error("❌ Faltan columnas FECHA y MONTO en el Excel.")
                     st.stop()
 
                 df_gastos = df_gastos.dropna(subset=['FECHA', 'MONTO']).copy()
                 gastos_a_cargar = []
+                omitidos_sueldo = 0
                 
                 for index, row in df_gastos.iterrows():
+                    # 1. Limpieza de datos
+                    detalle_valor = str(row['DETALLE']).strip() if 'DETALLE' in df_gastos.columns else "Sin detalle"
+                    detalle_upper = detalle_valor.upper()
+                    
+                    # 2. FILTRO INTELIGENTE: Ignorar Sueldos manuales
+                    # Como el Dashboard calcula el costo chofer automático, si subimos esto se duplica.
+                    if "SUELDO" in detalle_upper or "IMPOSICIONES" in detalle_upper or "PREVIRED" in detalle_upper:
+                        omitidos_sueldo += 1
+                        continue 
+
                     monto_clean = limpiar_monto_inteligente(row['MONTO'])
+                    
                     if monto_clean > 0:
-                        tipo_valor = row['CATEGORIA'] if 'CATEGORIA' in df_gastos.columns else "Gasto General"
-                        detalle_valor = row['DETALLE'] if 'DETALLE' in df_gastos.columns else ""
+                        tipo_valor = row['CATEGORIA'] if 'CATEGORIA' in df_gastos.columns else "GASTO GENERAL"
+                        
                         gastos_a_cargar.append({
                             "fecha": row['FECHA'],
-                            "tipo": str(tipo_valor) if not pd.isna(tipo_valor) else "Gasto General",
-                            "descripcion": str(detalle_valor) if not pd.isna(detalle_valor) else "Sin detalle",
+                            "tipo": str(tipo_valor), # Esto irá a la columna 'tipo_gasto'
+                            "descripcion": detalle_valor,
                             "monto": monto_clean,
-                            "proveedor": str(detalle_valor) if not pd.isna(detalle_valor) else "Varios"
+                            "proveedor": detalle_valor # Usamos el mismo detalle como proveedor por ahora
                         })
 
                 if gastos_a_cargar:
-                    st.info(f"✅ Se detectaron {len(gastos_a_cargar)} gastos.")
-                    with st.expander("Ver detalle de gastos", expanded=False):
+                    st.info(f"✅ Se detectaron {len(gastos_a_cargar)} gastos válidos.")
+                    
+                    if omitidos_sueldo > 0:
+                        st.warning(f"🛡️ Se omitieron {omitidos_sueldo} filas de 'Sueldo/Imposiciones' para evitar duplicar costos (el sistema ya los calcula automáticos).")
+
+                    with st.expander("Ver detalle de gastos a cargar", expanded=False):
                         st.dataframe(pd.DataFrame(gastos_a_cargar), use_container_width=True)
 
                     if st.button("Confirmar e Importar Gastos", type="primary", key="btn_gastos"):
@@ -396,14 +710,22 @@ elif menu == "Subir Archivos":
                         with engine.begin() as conn:
                             for g in gastos_a_cargar:
                                 try:
+                                    # Insertamos en la columna 'tipo_gasto' que acabamos de crear
                                     sql = text('INSERT INTO "GASTOS" (fecha, tipo_gasto, descripcion, monto, proveedor) VALUES (:f, :t, :d, :m, :p)')
                                     conn.execute(sql, {"f": g['fecha'], "t": g['tipo'], "d": g['descripcion'], "m": g['monto'], "p": g['proveedor']})
                                     count += 1
                                 except Exception as row_error: st.error(f"Error fila {count+1}: {row_error}")
+                        
                         if count > 0:
-                            st.success(f"¡Listo! {count} gastos registrados.")
+                            st.success(f"¡Listo! {count} gastos registrados correctamente.")
                             time.sleep(2)
                             st.rerun()
+                else:
+                    if omitidos_sueldo > 0:
+                        st.warning("El archivo solo contenía Sueldos/Imposiciones y fueron omitidos para evitar duplicidad.")
+                    else:
+                        st.warning("No se encontraron filas válidas para cargar.")
+                        
             except Exception as e:
                 st.error(f"Error procesando gastos: {e}")
 
